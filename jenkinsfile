@@ -1,0 +1,48 @@
+pipeline {
+    agent {
+        label 'sha-ubuntu-node'
+    }
+    triggers {
+        pollSCM('H/5 * * * *') // checks every 3 mins, or
+        // OR use GitHub webhook instead (recommended)
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('GitLeaks Scan') {
+            steps {
+                sh '''#!/bin/bash
+                    set -eux
+                    # Install gitleaks if not present
+                    if ! command -v gitleaks &> /dev/null; then
+                        echo "Installing Gitleaks..."
+                        wget https://github.com/zricethezav/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
+                        tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
+                        chmod +x gitleaks
+                        sudo mv gitleaks /usr/local/bin/
+                    fi
+                    
+                    # Run gitleaks detect
+                    gitleaks detect --source python_app --verbose --report-path gitleaks-report.json || exit_code=$?
+                    if [ "$exit_code" -eq 1 ]; then
+                        echo "Gitleaks found secrets. Check gitleaks-report.json for details"
+                        exit 1
+                    fi
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed.'
+        }
+    }
+}
