@@ -1,10 +1,8 @@
 pipeline {
-    agent {
-        label 'sha-ubuntu-node'
-    }
+    agent { label 'sha-ubuntu-node' }
+
     triggers {
-        pollSCM('H/5 * * * *') // checks every 3 mins, or
-        // OR use GitHub webhook instead (recommended)
+        pollSCM('H/5 * * * *') // Poll every 5 minutes (use webhook instead in real setup)
     }
 
     stages {
@@ -13,24 +11,42 @@ pipeline {
                 checkout scm
             }
         }
+
         stage('GitLeaks Scan') {
             steps {
                 sh '''#!/bin/bash
-                    set -eux
+                    set -euxo pipefail
+
+                    # Define variables
+                    GITLEAKS_VERSION="8.18.1"
+                    GITLEAKS_BINARY="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+
                     # Install gitleaks if not present
                     if ! command -v gitleaks &> /dev/null; then
                         echo "Installing Gitleaks..."
-                        wget https://github.com/zricethezav/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
-                        tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
+                        wget -q https://github.com/zricethezav/gitleaks/releases/download/v${GITLEAKS_VERSION}/${GITLEAKS_BINARY}
+                        tar -xzf ${GITLEAKS_BINARY}
                         chmod +x gitleaks
                         sudo mv gitleaks /usr/local/bin/
                     fi
-                    
+
                     # Run gitleaks detect
-                    gitleaks detect --source python_app --verbose --report-path gitleaks-report.json || exit_code=$?
-                    if [ "$exit_code" -eq 1 ]; then
-                        echo "Gitleaks found secrets. Check gitleaks-report.json for details"
+                    echo "Running Gitleaks scan..."
+                    mkdir -p reports
+                    set +e
+                    gitleaks detect --source python-app --verbose --report-format json --report-path reports/gitleaks-report.json
+                    scan_exit=$?
+                    set -e
+
+                    # Handle exit codes
+                    if [ "$scan_exit" -eq 1 ]; then
+                        echo "❌ Gitleaks found secrets. Check reports/gitleaks-report.json for details."
                         exit 1
+                    elif [ "$scan_exit" -ne 0 ]; then
+                        echo "⚠️ Gitleaks exited with unexpected code $scan_exit"
+                        exit $scan_exit
+                    else
+                        echo "✅ No secrets detected by Gitleaks."
                     fi
                 '''
             }
@@ -38,11 +54,14 @@ pipeline {
     }
 
     post {
+        always {
+            archiveArtifacts artifacts: 'reports/gitleaks-report.json', onlyIfSuccessful: false
+        }
         success {
-            echo 'Pipeline completed successfully!'
+            echo '✅ Pipeline completed successfully!'
         }
         failure {
-            echo 'Pipeline failed.'
+            echo '❌ Pipeline failed due to Gitleaks findings or error.'
         }
     }
 }
