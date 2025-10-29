@@ -34,7 +34,7 @@ pipeline {
                     echo "Running Gitleaks scan..."
                     mkdir -p reports
                     set +e
-                    gitleaks detect --source python-app --verbose --report-format json --report-path reports/gitleaks-report.json
+                    gitleaks detect --source python_app --verbose --report-format json --report-path reports/gitleaks-report.json
                     scan_exit=$?
                     set -e
 
