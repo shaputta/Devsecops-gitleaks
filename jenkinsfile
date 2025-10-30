@@ -1,6 +1,6 @@
 pipeline {
     agent {
-        label 'sha-ubuntu-node'
+        label 'sha-security-agent'
     }
 
     environment {
@@ -8,35 +8,14 @@ pipeline {
     }
 
     stages {
+        stage('Cleanup') {
+            steps {
+                cleanWs()
+            }
+        }
         stage('Checkout') {
             steps {
                 checkout scm
-            }
-        }
-        stage('Fetch Secret from Vault') {
-            steps {
-                script {
-                    withVault([vaultSecrets: [
-                        [path: 'secret/app_secret', secretValues: [[envVar: 'APP1', vaultKey: 'app1']
-                        ]]
-                    ]]) {
-                    //     sh '''
-                    // echo "Setting up Python environment..."
-                    // python3 -m venv venv
-                    // source venv/bin/activate
-                    // pip install --upgrade pip
-                    // pip install flask
-                    
-                    // echo "Using secret in Python app"
-                    // export API_KEY=$APP1
-                    // python3 python_app/app.py
-                    //     '''
-                    sh '''
-                    docker build -t flask-vault-app .
-                    docker run -d -p 8005:5000 -e API_KEY=$APP1 flask-vault-app
-                    '''
-                    }
-                }
             }
         }
         stage('GitLeaks Scan') {
@@ -51,14 +30,40 @@ pipeline {
                         chmod +x gitleaks
                         sudo mv gitleaks /usr/local/bin/
                     fi
-                    
                     # Run gitleaks detect even if from non commited codes
-                    gitleaks detect --source . --no-git --verbose --report-path gitleaks-report.json || exit_code=$?
-                    if [ "$exit_code" -eq 1 ]; then
-                        echo "Gitleaks found secrets. Check gitleaks-report.json for details"
-                        exit 1
-                    fi
+
+
+                    echo "🔍 Running Gitleaks scan..."
+                    set +e  # temporarily disable fail-fast
+                    gitleaks detect --source python_app --no-git --verbose --report-path gitleaks-report.json 
+                    result=$?  # capture exit status
+                    set -e  # re-enable fail-fast
+
+                if [ "$result" -ne 0 ]; then
+                    echo "❌ Gitleaks found leaks (exit code $result)"
+                    exit 1
+                else
+                    echo "✅ No leaks found."
+                fi
                 '''
+            }
+        }
+        stage('Fetch Secret from Vault') {
+            steps {
+                script {
+                    withVault([vaultSecrets: [
+                        [path: 'secret/app_secret', secretValues: [[envVar: 'APP1', vaultKey: 'app1']
+                        ]]
+                    ]]) {
+
+                    sh '''
+                    docker rm -f py-app || true
+                    docker rmi -f flask-vault-app:latest || true
+                    docker build -t flask-vault-app:latest .
+                    docker run -d -p 8005:5000 -e API_KEY=$APP1 --name py-app flask-vault-app:latest
+                    '''
+                    }
+                }
             }
         }
     }
